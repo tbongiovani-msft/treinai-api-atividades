@@ -18,17 +18,27 @@ namespace TreinAI.Api.Atividades.Functions;
 public class AtividadeFunctions
 {
     private readonly IRepository<Atividade> _repository;
+    private readonly IRepository<Aluno> _alunoRepo;
     private readonly TenantContext _tenantContext;
     private readonly ILogger<AtividadeFunctions> _logger;
 
     public AtividadeFunctions(
         IRepository<Atividade> repository,
+        IRepository<Aluno> alunoRepo,
         TenantContext tenantContext,
         ILogger<AtividadeFunctions> logger)
     {
         _repository = repository;
+        _alunoRepo = alunoRepo;
         _tenantContext = tenantContext;
         _logger = logger;
+    }
+
+    private async Task<string?> ResolveAlunoRecordIdAsync()
+    {
+        var alunos = await _alunoRepo.QueryAsync(
+            _tenantContext.TenantId, a => a.UserId == _tenantContext.UserId);
+        return alunos.FirstOrDefault()?.Id;
     }
 
     /// <summary>
@@ -59,9 +69,10 @@ public class AtividadeFunctions
         }
         else if (_tenantContext.IsAluno)
         {
-            atividades = await _repository.QueryAsync(
-                _tenantContext.TenantId,
-                a => a.AlunoId == _tenantContext.UserId);
+            var alunoRecordId = await ResolveAlunoRecordIdAsync();
+            atividades = alunoRecordId != null
+                ? await _repository.QueryAsync(_tenantContext.TenantId, a => a.AlunoId == alunoRecordId)
+                : Array.Empty<Atividade>();
         }
         else
         {
@@ -83,8 +94,12 @@ public class AtividadeFunctions
         if (atividade == null)
             throw new NotFoundException("Atividade", id);
 
-        if (_tenantContext.IsAluno && atividade.AlunoId != _tenantContext.UserId)
-            throw new ForbiddenException("Você só pode acessar suas próprias atividades.");
+        if (_tenantContext.IsAluno)
+        {
+            var alunoRecordId = await ResolveAlunoRecordIdAsync();
+            if (atividade.AlunoId != alunoRecordId)
+                throw new ForbiddenException("Você só pode acessar suas próprias atividades.");
+        }
 
         return await ValidationHelper.OkAsync(req, atividade);
     }
@@ -103,7 +118,8 @@ public class AtividadeFunctions
         // Alunos can only create activities for themselves
         if (_tenantContext.IsAluno)
         {
-            atividade.AlunoId = _tenantContext.UserId;
+            var alunoRecordId = await ResolveAlunoRecordIdAsync();
+            atividade.AlunoId = alunoRecordId ?? _tenantContext.UserId;
         }
 
         atividade.TenantId = _tenantContext.TenantId;
@@ -129,8 +145,12 @@ public class AtividadeFunctions
         if (existing == null)
             throw new NotFoundException("Atividade", id);
 
-        if (_tenantContext.IsAluno && existing.AlunoId != _tenantContext.UserId)
-            throw new ForbiddenException("Você só pode editar suas próprias atividades.");
+        if (_tenantContext.IsAluno)
+        {
+            var alunoRecordId = await ResolveAlunoRecordIdAsync();
+            if (existing.AlunoId != alunoRecordId)
+                throw new ForbiddenException("Você só pode editar suas próprias atividades.");
+        }
 
         var validator = new AtividadeValidator();
         var atividade = await ValidationHelper.ValidateRequestAsync(req, validator);
@@ -157,8 +177,12 @@ public class AtividadeFunctions
         if (existing == null)
             throw new NotFoundException("Atividade", id);
 
-        if (_tenantContext.IsAluno && existing.AlunoId != _tenantContext.UserId)
-            throw new ForbiddenException("Você só pode excluir suas próprias atividades.");
+        if (_tenantContext.IsAluno)
+        {
+            var alunoRecordId = await ResolveAlunoRecordIdAsync();
+            if (existing.AlunoId != alunoRecordId)
+                throw new ForbiddenException("Você só pode excluir suas próprias atividades.");
+        }
 
         await _repository.DeleteAsync(id, _tenantContext.TenantId);
         return ValidationHelper.NoContent(req);
@@ -172,8 +196,12 @@ public class AtividadeFunctions
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "alunos/{alunoId}/atividades")] HttpRequestData req,
         string alunoId)
     {
-        if (_tenantContext.IsAluno && alunoId != _tenantContext.UserId)
-            throw new ForbiddenException("Você só pode acessar suas próprias atividades.");
+        if (_tenantContext.IsAluno)
+        {
+            var alunoRecordId = await ResolveAlunoRecordIdAsync();
+            if (alunoId != alunoRecordId)
+                throw new ForbiddenException("Você só pode acessar suas próprias atividades.");
+        }
 
         var atividades = await _repository.QueryAsync(
             _tenantContext.TenantId,
